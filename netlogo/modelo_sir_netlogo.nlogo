@@ -3,8 +3,15 @@
 ;; Cada infectado (estado al inicio del tick) elige UN contacto al azar entre
 ;; los demás individuos; si es susceptible y random < beta, se infecta;
 ;; luego el infectado se recupera si random < gamma. Actualización síncrona.
+;;
+;; Parte visual (personas que caminan por una plaza): todo el código de dibujo y
+;; animación se ejecuta dentro de with-local-randomness, de modo que no consume el
+;; generador aleatorio principal y la epidemia (y el CSV) es idéntica con o sin animación.
 
 extensions [ csv ]
+
+;; Vínculo breve que muestra quién contagió a quién
+directed-link-breed [ contagios contagio ]
 
 globals [
   ;; Serie de la simulación propia de NetLogo (un valor por tick, 0..max-ticks)
@@ -13,11 +20,24 @@ globals [
   py-t py-s py-i py-r
   ;; Mensaje de estado que se muestra en el monitor "Estado"
   status
+  ;; Contagios del tick actual: lista de pares [infectante infectado] (solo para dibujar)
+  infections-tick
+  ;; Personas recién infectadas en el tick actual (efecto visual de pulso)
+  new-infected
 ]
 
 turtles-own [
   state       ;; estado actual: 0 = susceptible, 1 = infectado, 2 = recuperado
   next-state  ;; copia del estado para la actualización síncrona
+  frame       ;; fotograma (1..9) del ciclo de caminata; solo visual
+]
+
+patches-own [
+  blocked?    ;; true en edificios, fuente, bancas y árboles: nadie camina por ahí
+]
+
+contagios-own [
+  age         ;; ticks transcurridos desde el contagio (el vínculo se borra a los 2)
 ]
 
 ;; ---------------------------------------------------------------------
@@ -37,16 +57,24 @@ to setup
   set net-s []
   set net-i []
   set net-r []
+  set infections-tick []
+  set new-infected no-turtles
   create-turtles population [
     setxy random-xcor random-ycor
-    set shape "circle"
-    set size 1.2
+    set shape "person"
+    set size person-size
     set state 0
     set next-state 0
+    set frame 1
   ]
   ;; Los infectados iniciales no pueden superar la población
   ask n-of (min list initial-infected population) turtles [ set state 1 ]
   paint-turtles
+  ;; Escenario y reubicación de personas: solo visual, con aleatoriedad local
+  with-local-randomness [
+    build-scene
+    place-people
+  ]
   reset-ticks
   record-state
   set status "Simulación NetLogo lista (tick 0)"
@@ -59,6 +87,8 @@ to go
   tick
   record-state
   paint-turtles
+  ;; Dibuja los contagios y camina un día; no toca el generador principal
+  with-local-randomness [ animate-day ]
   redraw-plots
   if ticks >= max-ticks [
     set status (word "Simulación NetLogo terminada en el tick " ticks)
@@ -68,29 +98,34 @@ end
 
 ;; Un paso de tiempo: lee el estado actual y escribe en next-state
 to step
+  set infections-tick []
   ask turtles [ set next-state state ]
   ask turtles with [ state = 1 ] [
     let contact one-of other turtles
     if contact != nobody [
       if [ state ] of contact = 0 and random-float 1 < beta [
         ask contact [ set next-state 1 ]
+        ;; Solo se anota el par para dibujarlo; no consume números aleatorios
+        set infections-tick lput (list self contact) infections-tick
       ]
     ]
     if random-float 1 < gamma [ set next-state 2 ]
   ]
   ask turtles [ set state next-state ]
-  ;; El movimiento es solo visual: el contagio no depende de la posición
+  ;; Las personas caminan en animate-day (aleatoriedad local). Este sorteo se conserva
+  ;; para que el flujo aleatorio principal sea el mismo que tenía la versión anterior
+  ;; (rt random 360) y la corrida con la misma semilla dé exactamente el mismo CSV.
   if wander? [
-    ask turtles [
-      rt random 360
-      fd 0.5
-    ]
+    ask turtles [ let legacy-draw random 360 ]
   ]
 end
 
+;; Color y forma según el estado: azul = susceptible, rojo = infectado, gris = recuperado
 to paint-turtles
   ask turtles [
-    set color ifelse-value (state = 0) [ green ] [ ifelse-value (state = 1) [ red ] [ gray ] ]
+    set color ifelse-value (state = 0) [ blue ] [ ifelse-value (state = 1) [ red ] [ gray ] ]
+    set shape standing-shape
+    set size person-size
   ]
 end
 
@@ -100,6 +135,177 @@ to record-state
   set net-s lput count turtles with [ state = 0 ] net-s
   set net-i lput count turtles with [ state = 1 ] net-i
   set net-r lput count turtles with [ state = 2 ] net-r
+end
+
+;; ---------------------------------------------------------------------
+;; Visual: personas, escenario y animación (todo bajo with-local-randomness)
+;; ---------------------------------------------------------------------
+
+to-report person-size
+  report 1.8
+end
+
+;; Forma de la persona detenida (el infectado lleva la marca de enfermo)
+to-report standing-shape
+  report ifelse-value (state = 1) [ "person sick" ] [ "person" ]
+end
+
+;; Fotograma de caminata: de perfil hacia la derecha o hacia la izquierda
+to-report walking-shape
+  report (word ifelse-value (sin heading >= 0) [ "person-forward-" ] [ "person-backward-" ] frame)
+end
+
+;; Distancia que recorre una persona en un tick completo (el infectado va más lento)
+to-report distance-per-tick
+  report ifelse-value (state = 1) [ 0.6 ] [ 1.2 ]
+end
+
+;; Un día: borra contagios viejos, dibuja los nuevos y hace caminar a la gente
+to animate-day
+  fade-contagios
+  show-contagios
+  let n-sub ifelse-value animacion? [ max list 1 velocidad-animacion ] [ 1 ]
+  let sub 1
+  repeat n-sub [
+    ask turtles [
+      step-walk (distance-per-tick / n-sub)
+      ;; Sin animación solo se mueve la posición: no se cambian formas ni fotogramas
+      if animacion? [
+        set frame (frame mod 9) + 1
+        set shape walking-shape
+      ]
+    ]
+    if animacion? [
+      ;; Pulso: el recién infectado se agranda y vuelve a su tamaño
+      ask new-infected [ set size person-size + 1 * (n-sub - sub) / n-sub ]
+      display
+    ]
+    set sub sub + 1
+  ]
+  if animacion? [
+    ask turtles [
+      set shape standing-shape
+      set size person-size
+    ]
+  ]
+end
+
+;; Un paso corto: giro suave al azar, esquiva edificios y rebota en los bordes
+to step-walk [ dist ]
+  rt (random-float 30) - 15
+  let attempts 0
+  while [ attempts < 10 and not free-ahead? dist ] [
+    rt 60 + random 240
+    set attempts attempts + 1
+  ]
+  if free-ahead? dist [ fd dist ]
+end
+
+to-report free-ahead? [ dist ]
+  report can-move? (dist + 0.6) and not [ blocked? ] of patch-ahead (dist + 0.6)
+end
+
+;; Los vínculos de contagio duran 2 ticks: el primero en rojo y el segundo atenuado
+to fade-contagios
+  ask contagios [
+    set age age + 1
+    ifelse age >= 2 [ die ] [ set color red + 3 ]
+  ]
+end
+
+;; Dibuja un vínculo rojo del infectante al recién infectado
+to show-contagios
+  foreach infections-tick [ pair ->
+    ask first pair [
+      create-contagio-to last pair [
+        set color red
+        set thickness 0.3
+        set age 0
+      ]
+    ]
+  ]
+  set new-infected turtle-set map [ pair -> last pair ] infections-tick
+end
+
+;; Pone a cada persona en un lugar libre del escenario
+to place-people
+  ask turtles [
+    set heading random 360
+    set frame 1 + random 9
+    if [ blocked? ] of patch-here or abs xcor > 15.4 or abs ycor > 15.4 [
+      move-to one-of patches with [ not blocked? and abs pxcor < 16 and abs pycor < 16 ]
+    ]
+  ]
+end
+
+;; Escenario: plaza con césped, caminos, fuente, bancas, árboles, casas y estanque
+to build-scene
+  ask patches [
+    set blocked? false
+    set pcolor 57 + random-float 0.6 - 0.3
+  ]
+  ;; Caminos en cruz y plaza circular
+  ask patches with [ abs pxcor <= 1 or abs pycor <= 1 ] [
+    set pcolor 37 + random-float 0.4 - 0.2
+  ]
+  ask patches with [ distancexy 0 0 <= 6 ] [
+    set pcolor 8.5 + random-float 0.4 - 0.2
+  ]
+  ;; Fuente central
+  ask patches with [ distancexy 0 0 <= 2.2 ] [
+    set pcolor 97 + random-float 0.4 - 0.2
+    set blocked? true
+  ]
+  ask patches with [ distancexy 0 0 > 2.2 and distancexy 0 0 <= 3 ] [
+    set pcolor 6.5
+  ]
+  ;; Estanque
+  ask patches with [ distancexy 10.5 -10.5 <= 3.2 ] [
+    set pcolor 95 + random-float 0.6 - 0.3
+    set blocked? true
+  ]
+  ;; Casas (techo, pared frontal y puerta)
+  build-house -14 -9 9 13 13
+  build-house 9 14 8 13 3
+  build-house -14 -10 -13 -9 23
+  ;; Bancas de la plaza
+  foreach [ [ -5 3 ] [ 4 3 ] [ -5 -4 ] [ 4 -4 ] ] [ spot ->
+    ask patches with [ pxcor >= item 0 spot and pxcor <= item 0 spot + 1 and pycor = item 1 spot ] [
+      set pcolor 33
+      set blocked? true
+    ]
+  ]
+  ;; Árboles (se estampan sobre el dibujo)
+  foreach [ [ -7 7 ] [ 7 7 ] [ -7 -7 ] [ 6 -7 ] [ -14 2 ] [ 14 -3 ] [ 14 2 ] [ -3 14 ] [ 4 14 ] [ -3 -14 ] [ 3 -14 ] [ -14 -4 ] ] [ spot ->
+    plant-tree item 0 spot item 1 spot
+  ]
+end
+
+;; Casa rectangular: techo de color, pared frontal oscura y puerta
+to build-house [ x1 x2 y1 y2 roof ]
+  ask patches with [ pxcor >= x1 and pxcor <= x2 and pycor >= y1 and pycor <= y2 ] [
+    set pcolor roof + random-float 0.6 - 0.3
+    set blocked? true
+  ]
+  ask patches with [ pxcor >= x1 and pxcor <= x2 and pycor = y1 ] [
+    set pcolor roof - 2
+  ]
+  ask patches with [ pxcor = floor ((x1 + x2) / 2) and pycor = y1 ] [
+    set pcolor 32
+  ]
+end
+
+;; Árbol estampado con una tortuga temporal (no cuenta como persona: muere al instante)
+to plant-tree [ x y ]
+  ask patch x y [ set blocked? true ]
+  create-turtles 1 [
+    setxy x y
+    set shape "tree"
+    set color 54
+    set size 2.6
+    stamp
+    die
+  ]
 end
 
 ;; ---------------------------------------------------------------------
@@ -254,8 +460,8 @@ GRAPHICS-WINDOW
 1
 1
 0
-1
-1
+0
+0
 1
 -16
 16
@@ -264,7 +470,7 @@ GRAPHICS-WINDOW
 1
 1
 1
-ticks
+día
 30.0
 
 BUTTON
@@ -504,6 +710,72 @@ status
 1
 11
 
+SWITCH
+5
+500
+125
+540
+animacion?
+animacion?
+0
+1
+-1000
+
+SLIDER
+5
+545
+255
+595
+velocidad-animacion
+velocidad-animacion
+1
+20
+8.0
+1
+1
+subpasos
+HORIZONTAL
+
+TEXTBOX
+265
+485
+375
+509
+● Susceptible
+11
+105.0
+1
+
+TEXTBOX
+380
+485
+480
+509
+● Infectado
+11
+15.0
+1
+
+TEXTBOX
+485
+485
+595
+509
+● Recuperado
+11
+5.0
+1
+
+TEXTBOX
+265
+510
+595
+550
+La línea roja une al infectante con la persona recién contagiada (dura 2 ticks).
+10
+0.0
+1
+
 PLOT
 605
 10
@@ -520,7 +792,7 @@ true
 true
 "" ""
 PENS
-"S" 1.0 0 -10899396 true "" ""
+"S" 1.0 0 -13345367 true "" ""
 "I" 1.0 0 -2674135 true "" ""
 "R" 1.0 0 -7500403 true "" ""
 
@@ -540,7 +812,7 @@ true
 true
 "" ""
 PENS
-"S" 1.0 0 -10899396 true "" ""
+"S" 1.0 0 -13345367 true "" ""
 "I" 1.0 0 -2674135 true "" ""
 "R" 1.0 0 -7500403 true "" ""
 
@@ -608,16 +880,30 @@ Modelo epidemiológico SIR (Susceptible – Infectado – Recuperado) por agente
 
 ## CÓMO FUNCIONA
 
-- 100 agentes (tortugas): verde = susceptible, rojo = infectado, gris = recuperado.
+- 100 agentes (tortugas) dibujados como personas en una plaza: azul = susceptible, rojo = infectado (con la marca de enfermo cuando está detenido), gris = recuperado.
 - Parámetros comunes de la práctica: población 100, infectados iniciales 5, β = 0.30, γ = 0.10, tiempo de simulación 100 (R₀ = β/γ = 3).
 - Regla de contacto (mezcla homogénea): en cada tick, cada infectado (estado al inicio del tick) elige **un** contacto al azar entre los demás individuos. Si el contacto es susceptible y un número aleatorio en [0, 1) es menor que β, pasa a infectado. Luego el infectado se recupera si otro número aleatorio es menor que γ.
 - La actualización es síncrona: todos leen el estado actual y las decisiones se escriben en `next-state`; al final del tick se copian a `state`.
-- Los agentes se mueven al azar solo como efecto visual (interruptor `wander?`); el contagio no depende de la posición.
+- Las personas caminan solo como efecto visual (interruptor `wander?`); el contagio no depende de la posición ni de la animación.
 - Se registran S, I y R en los ticks 0..100 y la simulación se detiene en `max-ticks`.
+
+## ESCENARIO Y ANIMACIÓN
+
+- **Escenario**: césped, caminos en cruz, plaza circular con una fuente al centro, bancas, árboles, tres casas y un estanque. Los edificios, la fuente, las bancas, los árboles y el estanque son zonas bloqueadas por donde nadie camina.
+- **Personas que caminan**: cada día (tick) se divide en `velocidad-animacion` subpasos (por defecto 8). En cada subpaso la persona avanza un poco con un giro suave al azar, cambia al siguiente fotograma de un ciclo de caminata de perfil (formas `person-forward-1..9` y `person-backward-1..9`, tomadas de los modelos incluidos en NetLogo), esquiva los edificios y rebota en los bordes. Los infectados caminan a la mitad de velocidad; susceptibles y recuperados, a la normal. Al terminar el día las personas quedan de pie (`person`, o `person sick` si están infectadas).
+- **Contagios visibles**: cuando alguien se infecta se dibuja una línea roja del infectante a la persona recién contagiada, que además se agranda un momento. La línea dura 2 ticks (el segundo atenuada) y luego se borra. La regla de contacto sigue siendo la mezcla homogénea: la línea solo hace visible el contacto al azar que ya se había sorteado.
+- **Interruptor `animacion?`** (activo por defecto): con animación se ve la caminata fluida; sin ella cada día es un solo paso y la corrida es mucho más rápida (la usa el experimento sin interfaz). El deslizador `velocidad-animacion` fija los subpasos por día (1 a 20).
+- **Contador "día"** sobre la vista y leyenda de colores bajo los monitores.
+
+## ALEATORIEDAD LOCAL (los resultados no cambian)
+
+Todo el código visual (construcción del escenario, caminata, giros, pulso y vínculos de contagio) se ejecuta dentro de `with-local-randomness`. Ese bloque usa un generador aparte y restaura el principal al terminar, por lo que dibujar o no, y con cuántos subpasos, no cambia ningún sorteo de la epidemia. El contagio y la recuperación conservan el mismo orden de llamadas aleatorias. Con la semilla 42 el archivo `resultados_netlogo.csv` es idéntico byte a byte con o sin animación (pico de 31 infectados en el tick 17 y 93 recuperados finales).
+
+El único sorteo "de movimiento" que sigue en el generador principal es `let legacy-draw random 360` dentro de `if wander?`: se conserva a propósito para que la corrida con la misma semilla dé exactamente el mismo CSV que la versión anterior; no mueve a nadie.
 
 ## CÓMO USARLO
 
-1. Ajusta los controles: `population`, `initial-infected`, `beta`, `gamma`, `max-ticks` y `seed` (semilla de `random-seed`; la misma semilla repite la misma corrida).
+1. Ajusta los controles: `population`, `initial-infected`, `beta`, `gamma`, `max-ticks`, `seed`, `wander?`, `animacion?` y `velocidad-animacion` (semilla de `random-seed`; la misma semilla repite la misma corrida).
 2. **SETUP** crea la población e inicia los gráficos. **GO** avanza hasta `max-ticks` y se detiene sola.
 3. **EXPORTAR NETLOGO** escribe `resultados_netlogo.csv` en la carpeta del modelo (reemplaza el archivo si existe).
 4. **CARGAR PYTHON** lee `resultados_python.csv` de la carpeta del modelo y lo dibuja. **CARGAR TODO** carga los archivos externos disponibles (por ahora, el de Python).
@@ -640,7 +926,7 @@ Dos implementaciones del mismo modelo con los mismos parámetros dan curvas pare
 
 ## EXPERIMENTO (BehaviorSpace)
 
-El experimento `ejecucion-completa` ejecuta SETUP, GO y EXPORTAR NETLOGO sin interfaz gráfica.
+El experimento `ejecucion-completa` ejecuta SETUP, GO y EXPORTAR NETLOGO sin interfaz gráfica y con `animacion?` desactivado.
 
 ## CRÉDITOS
 
@@ -826,6 +1112,214 @@ Rectangle -7500403 true true 127 79 172 94
 Polygon -7500403 true true 195 90 240 150 225 180 165 105
 Polygon -7500403 true true 105 90 60 150 75 180 135 105
 
+person sick
+false
+0
+Circle -7500403 true true 110 5 80
+Polygon -7500403 true true 105 90 120 195 90 285 105 300 135 300 150 225 165 300 195 300 210 285 180 195 195 90
+Rectangle -7500403 true true 127 79 172 94
+Polygon -7500403 true true 195 90 240 150 225 180 165 105
+Polygon -7500403 true true 105 90 60 150 75 180 135 105
+Circle -2674135 true false 178 163 95
+
+person-backward-1
+false
+0
+Polygon -7500403 true true 180 195 180 105 165 90 105 90 105 105 105 120 120 180
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 135 195 180 180 204 228 240 255 225 300 167 242
+Polygon -7500403 true true 120 180 180 180 144 232 141 299 101 299 105 223
+Polygon -7500403 true true 165 90 205 125 240 180 210 195 173 137 150 120
+Polygon -7500403 true true 120 136 120 151 94 202 66 190 90 136 105 91
+
+person-backward-2
+false
+0
+Polygon -7500403 true true 120 136 135 166 108 203 80 191 98 147 109 98
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 132 176 183 160 195 225 225 255 210 300 165 255
+Polygon -7500403 true true 126 164 180 180 150 225 150 300 105 300 105 225
+Polygon -7500403 true true 195 180 180 105 165 90 113 89 105 105 105 120 120 180
+Polygon -7500403 true true 169 91 204 135 225 180 180 195 165 150 150 120
+
+person-backward-3
+false
+0
+Polygon -7500403 true true 129 123 119 162 135 200 104 201 102 150 106 104
+Polygon -7500403 true true 135 180 180 180 180 225 210 285 165 300 135 225
+Polygon -7500403 true true 120 180 179 180 142 239 165 300 120 300 120 225
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 184 192 180 105 165 90 120 90 105 105 105 120 120 195
+Polygon -7500403 true true 165 90 180 105 207 193 172 199 165 150 150 120
+
+person-backward-4
+false
+0
+Polygon -7500403 true true 120 135 120 165 125 205 114 203 110 135 117 89
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 135 180 180 180 180 225 180 300 135 300 135 225
+Polygon -7500403 true true 119 182 149 182 164 227 164 302 119 302 119 212
+Polygon -7500403 true true 180 190 180 105 170 90 120 90 105 105 105 120 120 195
+Polygon -7500403 true true 155 90 170 102 180 135 180 165 180 210 150 210
+
+person-backward-5
+false
+0
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 120 180 165 180 165 225 180 300 120 300 120 225
+Polygon -7500403 true true 105 180 180 180 165 225 150 300 105 300 99 222
+Polygon -7500403 true true 180 195 180 105 165 90 120 90 105 105 105 120 120 195
+Polygon -7500403 true true 120 135 120 165 120 195 105 195 105 120 117 89
+Polygon -7500403 true true 164 128 164 158 164 203 134 203 135 120 158 95
+
+person-backward-6
+false
+0
+Polygon -7500403 true true 135 180 180 180 178 222 195 300 150 300 135 225
+Polygon -7500403 true true 118 174 180 178 135 240 127 298 86 294 90 225
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 184 192 180 105 165 90 120 90 105 105 105 120 120 195
+Polygon -7500403 true true 165 90 195 120 207 193 180 195 180 135 150 120
+Polygon -7500403 true true 150 124 150 154 139 201 105 199 107 133 117 93
+
+person-backward-7
+false
+0
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 135 180 180 180 195 240 210 300 165 300 150 240
+Polygon -7500403 true true 135 166 180 181 123 229 120 297 79 289 87 210
+Polygon -7500403 true true 180 195 180 105 165 90 120 90 105 105 105 120 111 193
+Polygon -7500403 true true 178 103 200 133 221 195 189 202 176 165 146 120
+Polygon -7500403 true true 120 133 135 163 120 210 90 195 102 146 105 105
+
+person-backward-8
+false
+0
+Polygon -7500403 true true 117 168 162 183 122 239 97 300 60 280 87 226
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 180 180 180 105 165 90 120 90 105 105 105 120 105 180
+Polygon -7500403 true true 165 90 201 127 234 183 208 197 182 158 150 120
+Polygon -7500403 true true 120 133 135 163 90 195 68 179 97 141 117 87
+Polygon -7500403 true true 135 180 180 180 195 240 225 300 180 300 150 240
+
+person-backward-9
+false
+0
+Circle -7500403 true true 95 5 80
+Rectangle -7500403 true true 117 73 153 90
+Polygon -7500403 true true 135 180 180 180 195 225 232 289 195 300 150 225
+Polygon -7500403 true true 112 185 165 180 137 240 129 300 83 301 100 229
+Polygon -7500403 true true 179 180 179 105 164 90 119 90 105 97 104 120 113 185
+Polygon -7500403 true true 165 90 210 135 240 180 210 195 180 150 150 120
+Polygon -7500403 true true 115 137 115 154 78 199 54 179 85 139 115 92
+
+person-forward-1
+false
+0
+Polygon -7500403 true true 120 195 120 105 135 90 195 90 195 105 195 120 180 180
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 165 195 120 180 96 228 60 255 75 300 133 242
+Polygon -7500403 true true 180 180 120 180 156 232 159 299 199 299 195 223
+Polygon -7500403 true true 135 90 95 125 60 180 90 195 127 137 150 120
+Polygon -7500403 true true 180 136 180 151 206 202 234 190 210 136 195 91
+
+person-forward-2
+false
+0
+Polygon -7500403 true true 180 136 165 166 192 203 220 191 202 147 191 98
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 168 176 117 160 105 225 75 255 90 300 135 255
+Polygon -7500403 true true 174 164 120 180 150 225 150 300 195 300 195 225
+Polygon -7500403 true true 105 180 120 105 135 90 187 89 195 105 195 120 180 180
+Polygon -7500403 true true 131 91 96 135 75 180 120 195 135 150 150 120
+
+person-forward-3
+false
+0
+Polygon -7500403 true true 171 123 181 162 165 200 196 201 198 150 194 104
+Polygon -7500403 true true 165 180 120 180 120 225 90 285 135 300 165 225
+Polygon -7500403 true true 180 180 121 180 158 239 135 300 180 300 180 225
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 116 192 120 105 135 90 180 90 195 105 195 120 180 195
+Polygon -7500403 true true 135 90 120 105 93 193 128 199 135 150 150 120
+
+person-forward-4
+false
+0
+Polygon -7500403 true true 180 135 180 165 175 205 186 203 190 135 183 89
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 165 180 120 180 120 225 120 300 165 300 165 225
+Polygon -7500403 true true 181 182 151 182 136 227 136 302 181 302 181 212
+Polygon -7500403 true true 120 190 120 105 130 90 180 90 195 105 195 120 180 195
+Polygon -7500403 true true 145 90 130 102 120 135 120 165 120 210 150 210
+
+person-forward-5
+false
+0
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 180 180 135 180 135 225 120 300 180 300 180 225
+Polygon -7500403 true true 195 180 120 180 135 225 150 300 195 300 201 222
+Polygon -7500403 true true 120 195 120 105 135 90 180 90 195 105 195 120 180 195
+Polygon -7500403 true true 180 135 180 165 180 195 195 195 195 120 183 89
+Polygon -7500403 true true 136 128 136 158 136 203 166 203 165 120 142 95
+
+person-forward-6
+false
+0
+Polygon -7500403 true true 165 180 120 180 122 222 105 300 150 300 165 225
+Polygon -7500403 true true 182 174 120 178 165 240 173 298 214 294 210 225
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 116 192 120 105 135 90 180 90 195 105 195 120 180 195
+Polygon -7500403 true true 135 90 105 120 93 193 120 195 120 135 150 120
+Polygon -7500403 true true 150 124 150 154 161 201 195 199 193 133 183 93
+
+person-forward-7
+false
+0
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 165 180 120 180 105 240 90 300 135 300 150 240
+Polygon -7500403 true true 165 166 120 181 177 229 180 297 221 289 213 210
+Polygon -7500403 true true 120 195 120 105 135 90 180 90 195 105 195 120 189 193
+Polygon -7500403 true true 122 103 100 133 79 195 111 202 124 165 154 120
+Polygon -7500403 true true 180 133 165 163 180 210 210 195 198 146 195 105
+
+person-forward-8
+false
+0
+Polygon -7500403 true true 183 168 138 183 178 239 203 300 240 280 213 226
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 120 180 120 105 135 90 180 90 195 105 195 120 195 180
+Polygon -7500403 true true 135 90 99 127 66 183 92 197 118 158 150 120
+Polygon -7500403 true true 180 133 165 163 210 195 232 179 203 141 183 87
+Polygon -7500403 true true 165 180 120 180 105 240 75 300 120 300 150 240
+
+person-forward-9
+false
+0
+Circle -7500403 true true 125 5 80
+Rectangle -7500403 true true 147 73 183 90
+Polygon -7500403 true true 165 180 120 180 105 225 68 289 105 300 150 225
+Polygon -7500403 true true 188 185 135 180 163 240 171 300 217 301 200 229
+Polygon -7500403 true true 121 180 121 105 136 90 181 90 195 97 196 120 187 185
+Polygon -7500403 true true 135 90 90 135 60 180 90 195 120 150 150 120
+Polygon -7500403 true true 185 137 185 154 222 199 246 179 215 139 185 92
+
 plant
 false
 0
@@ -961,6 +1455,12 @@ setup repeat 20 [ go ]
     </enumeratedValueSet>
     <enumeratedValueSet variable="wander?">
       <value value="true"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="animacion?">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="velocidad-animacion">
+      <value value="8"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>
