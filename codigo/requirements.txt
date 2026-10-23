@@ -1,0 +1,5 @@
+# Librerías necesarias para ejecutar esta APE: pip install -r requirements.txt
+simpy==4.1.2
+numpy==2.5.4
+matplotlib==3.11.2
+pytest==9.1.1
