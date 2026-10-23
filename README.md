@@ -22,11 +22,11 @@
 
 ## 1. ¿Qué hacemos en esta práctica?
 
-Programamos **el mismo modelo epidemiológico SIR** en tres herramientas y las comparamos:
+Programamos **el mismo modelo epidemiológico SIR** en dos herramientas y las comparamos:
 
-- **Python (SimPy)** y **Java** simulan la epidemia y guardan los resultados en un archivo CSV.
-- **NetLogo** simula la epidemia con agentes (las "tortugas") y además **importa** los CSV de Python y Java
-  para dibujar las tres curvas juntas y compararlas.
+- **Python (SimPy)** genera los datos: simula la epidemia, guarda los resultados en un archivo CSV y dibuja las gráficas.
+- **NetLogo** simula la epidemia con agentes (las "tortugas") y además **importa** el CSV de Python
+  para dibujar las curvas juntas y compararlas.
 
 La población se divide en tres grupos:
 
@@ -34,7 +34,7 @@ La población se divide en tres grupos:
 - **I** — infectados, en rojo.
 - **R** — recuperados, en gris.
 
-Los parámetros son los mismos en las tres herramientas:
+Los parámetros son los mismos en las dos herramientas:
 
 | Parámetro | Valor |
 | --- | --- |
@@ -47,7 +47,7 @@ Los parámetros son los mismos en las tres herramientas:
 
 Con estos valores, R₀ = β / γ = 3: cada infectado contagia en promedio a unas tres personas antes de recuperarse.
 
-**Regla de cada paso de tiempo (igual en las tres herramientas):** cada infectado elige a una persona al azar;
+**Regla de cada paso de tiempo (igual en las dos herramientas):** cada infectado elige a una persona al azar;
 si esa persona es susceptible y sale un número aleatorio menor que β, se contagia. Después, el infectado se recupera
 si sale un número aleatorio menor que γ.
 
@@ -56,14 +56,13 @@ si sale un número aleatorio menor que γ.
 ```text
 simulacion-ape-4-sir/
 ├── codigo/      # Python + SimPy: genera resultados_python.csv y las gráficas
-├── java/        # Java: genera resultados_java.csv
-├── netlogo/     # Modelo de NetLogo + los tres CSV (python, java, netlogo)
+├── netlogo/     # Modelo de NetLogo + los CSV (python y netlogo)
 ├── documento/   # Informe (PDF y editable)
 ├── guia/        # Guía de la práctica entregada por el docente
 └── referencias.bib
 ```
 
-Python y Java guardan su CSV directamente dentro de `netlogo/`, en la misma carpeta que el modelo,
+Python guarda su CSV directamente dentro de `netlogo/`, en la misma carpeta que el modelo,
 como pide la guía. Así NetLogo los encuentra sin copiar nada a mano.
 
 ## 3. Cómo levantar el proyecto (paso a paso)
@@ -74,7 +73,6 @@ como pide la guía. Así NetLogo los encuentra sin copiar nada a mano.
 | --- | --- | --- | --- |
 | Git | cualquiera | Bajar el repositorio | <https://git-scm.com/downloads> |
 | Python | 3.11 o superior | Parte de Python | <https://www.python.org/downloads/> |
-| Java (JDK) | 22 o superior | Parte de Java | <https://adoptium.net/> |
 | NetLogo | 7.0 o superior | Simulación y comparación | <https://ccl.northwestern.edu/netlogo/download.shtml> |
 
 Para comprobar que están instalados, abre una terminal y escribe:
@@ -82,7 +80,6 @@ Para comprobar que están instalados, abre una terminal y escribe:
 ```bash
 git --version
 python --version     # en algunos equipos es: python3 --version
-java --version
 ```
 
 > En Windows, al instalar Python marca la casilla **"Add Python to PATH"**.
@@ -124,35 +121,20 @@ cd ..
 > Si usas VS Code: selecciona el intérprete `codigo/.venv` (abajo a la derecha) y también puedes darle al botón
 > **Run** sobre `codigo/simulacion_ape/__main__.py`.
 
-### 3.3 Java (genera `resultados_java.csv`)
-
-No hace falta compilar ni instalar Maven: Java ejecuta directamente el código fuente.
-
-```bash
-cd java
-# Linux / macOS
-./run.sh
-# Windows (o cualquier sistema)
-java src/Main.java
-cd ..
-```
-
-> El comando exacto también está en [java/README.md](java/README.md).
-
-### 3.4 NetLogo (simula y compara)
+### 3.3 NetLogo (simula y compara)
 
 1. Abre NetLogo.
 2. **File → Open** y elige `netlogo/modelo_sir_netlogo.nlogox`.
 3. Presiona **SETUP** y luego **GO**: NetLogo corre su propia simulación con las tortugas.
-4. Presiona **CARGAR PYTHON** y **CARGAR JAVA**: NetLogo lee los CSV y dibuja las curvas de cada herramienta.
+4. Presiona **CARGAR PYTHON**: NetLogo lee el CSV de Python y dibuja sus curvas.
 5. Mira las gráficas de **Comparación de infectados, susceptibles y recuperados**.
 6. (Opcional) **EXPORTAR NETLOGO** guarda la corrida de NetLogo en `resultados_netlogo.csv`.
 
-> Si NetLogo dice que no encuentra el CSV, primero corre la parte de Python (3.2) y la de Java (3.3).
+> Si NetLogo dice que no encuentra el CSV, primero corre la parte de Python (3.2).
 
-### 3.5 Formato de los CSV
+### 3.4 Formato de los CSV
 
-Los tres archivos tienen el mismo formato, una fila por instante de tiempo (de 0 a 100):
+Los dos archivos tienen el mismo formato, una fila por instante de tiempo (de 0 a 100):
 
 ```text
 tiempo,susceptibles,infectados,recuperados
@@ -175,8 +157,8 @@ git push -u origin tu-nombre/tema     # luego abre el pull request en GitHub
 
 ## 5. ¿Por qué los resultados no salen idénticos?
 
-Las tres herramientas usan el mismo modelo y los mismos parámetros, pero **cada una tiene su propio generador de
-números aleatorios** (NumPy en Python, `java.util.Random` en Java y el generador de NetLogo). Aunque usemos la misma
+Las dos herramientas usan el mismo modelo y los mismos parámetros, pero **cada una tiene su propio generador de
+números aleatorios** (NumPy en Python y el generador propio de NetLogo). Aunque usemos la misma
 semilla, la secuencia de números es distinta, así que los contagios ocurren en momentos distintos. Las curvas tienen
 la misma forma (sube el pico de infectados y luego baja), pero los valores exactos cambian. Esto se analiza en el informe.
 
@@ -184,7 +166,7 @@ la misma forma (sube el pico de infectados y luego baja), pero los valores exact
 
 | Herramienta | Uso |
 | --- | --- |
-| Agente de programación el Gentleman (Pi) con modelo Claude | Lectura de la guía, modelo SIR en Python, Java y NetLogo, pruebas, gráficas e informe. |
+| Agente de programación el Gentleman (Pi) con modelo Claude | Lectura de la guía, modelo SIR en Python y NetLogo, pruebas, gráficas e informe. |
 
 La IA ejecutó; las decisiones de modelo, formato y contenido las tomó el grupo.
 
@@ -192,10 +174,21 @@ La IA ejecutó; las decisiones de modelo, formato y contenido las tomó el grupo
 
 1. Entender la guía y fijar una regla de contagio común
 2. Modelo SIR en Python con SimPy
-3. Modelo SIR en Java
-4. Modelo SIR en NetLogo e importación de CSV
+3. Modelo SIR en NetLogo e importación de CSV
 5. Comparación de resultados e informe
 
 ## 8. Resultados
 
-Pendiente: se completa cuando estén las tres corridas.
+Corrida con semilla 42 en las dos herramientas (mismos parámetros y misma regla de contagio).
+
+| Herramienta | Pico de infectados | Instante del pico | Susceptibles al final | Recuperados al final |
+| --- | --- | --- | --- | --- |
+| Python (SimPy) | 36 | t = 21 | 6 | 93 |
+| NetLogo | 31 | t = 17 | 7 | 93 |
+
+Con 30 réplicas en Python (semillas 0 a 29) el pico promedio es 36,1 infectados (desviación 7,0) en t ≈ 19,3,
+y en promedio terminan 93,3 recuperados. Las dos curvas tienen la misma forma: los infectados suben hasta un pico
+alrededor de t = 20 y luego bajan, y casi toda la población termina recuperada. Las diferencias de una corrida a otra
+vienen del generador de números aleatorios (sección 5).
+
+Gráfica comparativa: [codigo/figuras/comparacion_herramientas.png](codigo/figuras/comparacion_herramientas.png).
